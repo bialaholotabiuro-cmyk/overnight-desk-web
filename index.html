@@ -1,5 +1,104 @@
 <!doctype html>
 <html lang="pl">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Overnight Desk</title></head>
-<body><h1>Overnight Desk</h1><p>Placeholder (STEP 4B)</p></body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Grok Bot · Overnight Desk</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header id="navbar" class="navbar hidden">
+      <div class="nav-left">
+        <button id="nav-avatar" class="icon-btn avatar-btn" aria-label="Account">LM</button>
+        <button id="nav-title" class="nav-title-btn">Grok Bot ›</button>
+      </div>
+      <div class="nav-right">
+        <button id="nav-search" class="icon-btn" aria-label="Szukaj">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        </button>
+        <button id="nav-bell" class="icon-btn bell-btn" aria-label="Powiadomienia">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span id="bell-dot" class="bell-dot hidden"></span>
+        </button>
+      </div>
+    </header>
+
+    <div id="error-banner" class="error-banner hidden" role="status"></div>
+    <main id="main" class="main"></main>
+
+    <nav id="tabbar" class="tabbar hidden" aria-label="Nawigacja">
+      <button class="tab-btn active" data-tab="home">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
+        <span>Home</span>
+      </button>
+      <button class="tab-btn" data-tab="bots">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9 16h6"/></svg>
+        <span>Bots</span>
+      </button>
+      <button class="tab-btn" data-tab="activity">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
+        <span>Activity</span>
+      </button>
+      <button class="tab-btn" data-tab="account">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        <span>Account</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Search modal -->
+  <div id="search-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-head">
+        <input id="search-input" class="input" type="search" placeholder="Nazwa, symbol lub mint..." autocomplete="off">
+        <button id="search-close" class="btn-ghost">Zamknij</button>
+      </div>
+      <div id="search-results" class="search-results"></div>
+    </div>
+  </div>
+
+  <!-- Fullscreen Live Screen modal -->
+  <div id="screen-modal" class="screen-modal hidden" role="dialog" aria-modal="true">
+    <div class="screen-modal-bar">
+      <span id="screen-modal-status" class="pill-small"></span>
+      <div class="screen-modal-actions">
+        <a id="screen-modal-fomo" class="btn-pill hidden" target="_blank" rel="noopener">Open on FOMO</a>
+        <button id="screen-modal-close" class="btn-ghost">Zamknij</button>
+      </div>
+    </div>
+    <div class="screen-modal-wrap">
+      <img id="screen-modal-img" alt="Ekran bota na żywo">
+    </div>
+  </div>
+
+  <!-- Sell sheet modal -->
+  <div id="sell-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-head">
+        <h3 id="sell-modal-title">Sell now</h3>
+        <button id="sell-modal-close" class="btn-ghost">Anuluj</button>
+      </div>
+      <div class="sell-presets">
+        <button class="preset-btn active" data-pct="25">25%</button>
+        <button class="preset-btn" data-pct="50">50%</button>
+        <button class="preset-btn" data-pct="100">100%</button>
+      </div>
+      <p class="muted small">Sterowanie zapisem w planie B odbywa się przez Telegram.</p>
+      <button id="sell-confirm-btn" class="btn-primary btn-red" disabled>Confirm sell · w planie B przez Telegram</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="chart.js"></script>
+  <script src="app.js"></script>
+</body>
 </html>
