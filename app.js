@@ -975,7 +975,7 @@
           <div class="row-main"><div class="row-title">Copy picks</div><div class="row-sub">Harmonogram: ${esc(values.picks_every || acc.copy_picks_schedule || 'off')}</div></div>
         </div>
         <div class="row-item">
-          <div class="row-main"><div class="row-title">Vault</div><div class="row-sub">${esc(acc.vault_status || 'pliki')}</div></div>
+          <div class="row-main"><div class="row-title">${esc(acc.vault_status || 'Vault: files · not on phone')}</div><div class="row-sub">Notatki desku w komputerze bota (Obsidian) · Desk/Live.md</div></div>
         </div>
         <div class="row-item">
           <div class="row-main"><div class="row-title">Powiadomienia</div><div class="row-sub">Telegram only (Plan B) · ${esc(values.notifier || 'telegram')}</div></div>
