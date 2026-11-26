@@ -9,35 +9,6 @@
     risk: { label: 'Risk', color: '#ff6b9a', unit: 'pozycje' },
   };
 
-  const SETTINGS_GROUPS = [
-    { bot: 'Scanner', keys: ['min_liq_usd', 'max_top10_pct', 'min_h1_change_pct', 'max_age_min'] },
-    { bot: 'Analyst', keys: ['min_holders', 'max_dev_pct', 'max_insiders_pct'] },
-    { bot: 'Brain', keys: ['risk_per_trade_pct', 'full_size_score', 'below_full_pct', 'max_pool_pct', 'min_ticket_usd', 'max_ticket_usd', 'max_trades_night'] },
-    { bot: 'Executor', keys: ['dip_pct', 'tp_x', 'tp_sell_pct', 'trail_pct', 'quote_timeout_s', 'verify_timeout_s'] },
-    { bot: 'Risk', keys: ['poll_s', 'stop_pct', 'timeout_h', 'timeout_min_gain_pct', 'night_loss_stop_pct'] },
-    { bot: 'Desk', keys: ['mode', 'paper_start_cash', 'night_start', 'lock_time', 'report_time', 'fee_pct', 'notifier', 'fomo_handle'] },
-  ];
-
-  const SETTING_RANGES = {
-    risk_per_trade_pct: [1, 10, 0.5],
-    full_size_score: [50, 95, 5],
-    below_full_pct: [20, 80, 5],
-    max_pool_pct: [0.5, 5, 0.5],
-    min_ticket_usd: [2, 25, 1],
-    max_ticket_usd: [10, 250, 5],
-    max_trades_night: [5, 60, 1],
-    dip_pct: [5, 30, 1],
-    tp_x: [1.5, 5, 0.1],
-    tp_sell_pct: [25, 75, 5],
-    trail_pct: [15, 60, 5],
-    poll_s: [2, 20, 1],
-    stop_pct: [10, 45, 1],
-    timeout_h: [1, 8, 0.5],
-    night_loss_stop_pct: [10, 50, 5],
-    paper_start_cash: [25, 1000, 25],
-    fee_pct: [0.1, 2.0, 0.05],
-  };
-
   const state = {
     dataPath: localStorage.getItem('desk_data_path') || '',
     tab: 'home',
@@ -49,6 +20,7 @@
     lastGoodTs: null,
     lastBalanceStr: '',
     lastScreenUrl: '',
+    settingsDraft: {}, // key -> draft string (unsaved Account edits)
     data: {
       state: null,
       charts: null,
@@ -142,22 +114,28 @@
   async function refreshAll() {
     if (!state.dataPath) return;
     try {
-      const [st, charts, act, ords] = await Promise.all([
+      const [st, charts, act, ords, acc, sets] = await Promise.all([
         fetchJson('state.json'),
         fetchJson('chart.json'),
         fetchJson('activity.json'),
         fetchJson('orders.json').catch(() => ({ items: [] })),
+        fetchJson('account.json').catch(() => state.data.account),
+        fetchJson('settings.json').catch(() => state.data.settings),
       ]);
       state.data.state = st;
       state.data.charts = charts;
       state.data.activity = act;
       state.data.orders = ords;
+      if (acc) state.data.account = acc;
+      if (sets) state.data.settings = sets;
       state.loading = false;
       state.error = null;
       state.lastGoodTs = st.ts || Math.floor(Date.now() / 1000);
       state.retryIn = 15;
       updateBellAndAvatar();
-      render();
+      // Don't wipe an in-progress Account edit with a poll re-render.
+      const editing = state.tab === 'account' && Object.keys(state.settingsDraft).length;
+      if (!editing) render();
       refreshLiveScreenImage();
     } catch (err) {
       state.loading = false;
@@ -708,6 +686,140 @@
     bindRowClicks();
   }
 
+
+  function settingsRegistry() {
+    const fromJson = state.data.settings && state.data.settings.registry;
+    if (fromJson && fromJson.settings && fromJson.settings.length) return fromJson;
+    return window.DESK_SETTINGS_REGISTRY || { settings: [], group_order: [], group_labels: {}, telegram_bot: 'GrzegrzolkaBot', live_warning: '' };
+  }
+
+  function telegramBotName() {
+    return (state.data.settings && state.data.settings.telegram_bot) || settingsRegistry().telegram_bot || 'GrzegrzolkaBot';
+  }
+
+  function currentSettingMap() {
+    const list = (state.data.settings && state.data.settings.settings) || [];
+    const map = {};
+    (settingsRegistry().settings || []).forEach((sp) => { map[sp.key] = sp.default; });
+    list.forEach((r) => { map[r.key] = r.value; });
+    return map;
+  }
+
+  function formatSettingDisplay(spec, stored) {
+    if (spec.kind === 'bool') return (stored === '1' || stored === 'true' || stored === 'on') ? 'on' : 'off';
+    if (spec.kind !== 'num') return String(stored ?? '');
+    const n = Number(stored);
+    if (!Number.isFinite(n)) return String(stored ?? '');
+    const body = Number.isInteger(n) ? String(n) : String(n);
+    if (spec.neg_display) return `-${body}%`;
+    if (spec.unit === 'pct') return `${body}%`;
+    if (spec.unit === 'usd') return `$${body}`;
+    if (spec.unit === 'x') return `${body}x`;
+    return body;
+  }
+
+  function effectiveHi(spec, values) {
+    let hi = spec.hi;
+    if (spec.dynamic_max_of) {
+      const dyn = Number(values[spec.dynamic_max_of]);
+      if (Number.isFinite(dyn)) hi = Math.min(hi, dyn);
+    }
+    return hi;
+  }
+
+  function parseDraft(spec, raw, values) {
+    const txt = String(raw ?? '').trim();
+    if (spec.kind === 'time') {
+      const m = txt.match(/^(\d{1,2}):(\d{2})$/);
+      if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) {
+        return { ok: false, error: `${spec.ui_key}: podaj godzinę HH:MM (00:00–23:59).` };
+      }
+      const stored = `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+      return { ok: true, stored, command: `set ${spec.command_name} to ${stored}` };
+    }
+    if (spec.kind === 'enum') {
+      const low = txt.toLowerCase();
+      if (!(spec.choices || []).includes(low)) {
+        return { ok: false, error: `${spec.ui_key}: dozwolone wartości: ${(spec.choices || []).join(', ')}.` };
+      }
+      return { ok: true, stored: low, command: `set ${spec.command_name} to ${low}` };
+    }
+    if (spec.kind === 'bool') {
+      const low = txt.toLowerCase();
+      let stored = null;
+      if (['1', 'true', 'on', 'yes', 'tak'].includes(low)) stored = '1';
+      if (['0', 'false', 'off', 'no', 'nie'].includes(low)) stored = '0';
+      if (stored === null) return { ok: false, error: `${spec.ui_key}: dozwolone on/off.` };
+      const shown = stored === '1' ? 'on' : 'off';
+      return { ok: true, stored, command: `set ${spec.command_name} to ${shown}` };
+    }
+    // num
+    let t = txt.replace(',', '.').replace(/%/g, '').replace(/\$/g, '').replace(/x$/i, '').trim();
+    const n0 = Number(t);
+    if (!Number.isFinite(n0)) return { ok: false, error: `${spec.ui_key}: '${raw}' nie jest liczbą.` };
+    const n = spec.neg_display ? Math.abs(n0) : n0;
+    const lo = spec.lo;
+    const hi = effectiveHi(spec, values);
+    if (n < lo || n > hi) {
+      const fmt = (v) => formatSettingDisplay(spec, v);
+      const rng = spec.neg_display ? `${fmt(hi)} do ${fmt(lo)}` : `${fmt(lo)} do ${fmt(hi)}`;
+      return { ok: false, error: `Poza zakresem: ${spec.ui_key} musi być w zakresie ${rng} (podano ${fmt(n)}).` };
+    }
+    const stored = Number.isInteger(n) ? String(n) : String(n);
+    return { ok: true, stored, command: `set ${spec.command_name} to ${formatSettingDisplay(spec, stored)}` };
+  }
+
+  function isValidSolanaAddress(addr) {
+    const a = String(addr || '').trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return false;
+    const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    let n = 0n;
+    try {
+      for (const ch of a) {
+        const i = B58.indexOf(ch);
+        if (i < 0) return false;
+        n = n * 58n + BigInt(i);
+      }
+    } catch { return false; }
+    let hex = n.toString(16);
+    if (hex.length % 2) hex = '0' + hex;
+    const pad = a.match(/^1*/)[0].length;
+    const len = (hex.length / 2) + pad;
+    return len === 32;
+  }
+
+  function telegramHttpsUrl(text) {
+    return `https://t.me/${telegramBotName()}?text=${encodeURIComponent(text)}`;
+  }
+  function telegramAppUrl(text) {
+    return `tg://resolve?domain=${telegramBotName()}&text=${encodeURIComponent(text)}`;
+  }
+
+  async function openTelegramCommand(cmd) {
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      copied = true;
+    } catch {}
+    const httpsUrl = telegramHttpsUrl(cmd);
+    const tgUrl = telegramAppUrl(cmd);
+    // Try the native scheme first (Android Chrome PWA), then https t.me, then the copied command.
+    const started = Date.now();
+    try { window.location.href = tgUrl; } catch {}
+    setTimeout(() => {
+      // If the app didn't take over, fall back to t.me (opens Telegram or a tab).
+      if (Date.now() - started < 2000) {
+        const a = document.createElement('a');
+        a.href = httpsUrl;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.click();
+      }
+    }, 700);
+    showToast(copied ? 'Komenda skopiowana · otwieram Telegram' : 'Otwórz Telegram i wyślij skopiowaną komendę');
+  }
+
+
   async function renderAccount() {
     if (!state.data.account) {
       try { state.data.account = await fetchJson('account.json'); } catch {}
@@ -716,38 +828,116 @@
       try { state.data.settings = await fetchJson('settings.json'); } catch {}
     }
     const acc = state.data.account || {};
-    const setList = state.data.settings?.settings || [];
-    const setMap = Object.fromEntries(setList.map((r) => [r.key, r.value]));
-    const mode = acc.mode || setMap.mode || 'PAPER';
+    const published = state.data.settings || {};
+    const registry = settingsRegistry();
+    const values = currentSettingMap();
+    const mode = published.mode || acc.mode || values.mode || 'PAPER';
+    const liveWarning = published.live_warning || registry.live_warning ||
+      'LIVE trades real cash on FOMO. New coins can go to 0 in minutes. Only put in what you can lose.';
+    const rpcDisplay = published.rpc_url || `set · ${registry.default_rpc_host || 'api.mainnet-beta.solana.com'}`;
+    const wdStatus = published.withdraw_address || 'not set';
+    const groupOrder = registry.group_order || [];
+    const groupLabels = registry.group_labels || {};
+    const specs = registry.settings || [];
+    const byGroup = {};
+    specs.forEach((sp) => {
+      (byGroup[sp.group] = byGroup[sp.group] || []).push(sp);
+    });
 
-    const groupsHtml = SETTINGS_GROUPS.map((g) => {
-      const rows = g.keys.map((k) => {
-        const val = setMap[k] ?? '—';
-        const rng = SETTING_RANGES[k];
-        if (rng) {
-          return `
-            <div class="slider-row">
-              <div class="slider-top"><span>${esc(k)}</span><span class="mono">${esc(val)}</span></div>
-              <input class="slider-input" type="range" min="${rng[0]}" max="${rng[1]}" step="${rng[2]}" value="${esc(val === '—' ? rng[0] : val)}" disabled>
-            </div>
-          `;
+    const dirtyValid = [];
+    const invalidMsgs = [];
+
+    function rowState(spec) {
+      const cur = values[spec.key];
+      const draft = Object.prototype.hasOwnProperty.call(state.settingsDraft, spec.key)
+        ? state.settingsDraft[spec.key]
+        : null;
+      const raw = draft === null ? cur : draft;
+      const parsed = parseDraft(spec, raw, { ...values, [spec.key]: raw });
+      // Recompute dynamic max against committed values + other drafts? use committed stop_pct unless stop itself is drafted
+      const valMap = { ...values };
+      Object.keys(state.settingsDraft).forEach((k) => {
+        const sp2 = specs.find((x) => x.key === k);
+        if (!sp2) return;
+        const p2 = parseDraft(sp2, state.settingsDraft[k], values);
+        if (p2.ok) valMap[k] = p2.stored;
+      });
+      const parsed2 = parseDraft(spec, raw, valMap);
+      const dirty = draft !== null && String(parsed2.ok ? parsed2.stored : raw) !== String(cur);
+      if (parsed2.ok && dirty) dirtyValid.push({ spec, ...parsed2 });
+      if (!parsed2.ok) invalidMsgs.push(parsed2.error);
+      return { cur, raw, parsed: parsed2, dirty };
+    }
+
+    const groupsHtml = groupOrder.map((g) => {
+      const rows = (byGroup[g] || []).map((spec) => {
+        const st = rowState(spec);
+        const cls = `slider-row${st.parsed.ok ? (st.dirty ? ' is-dirty' : '') : ' is-invalid'}`;
+        const shown = st.parsed.ok ? formatSettingDisplay(spec, st.parsed.stored) : formatSettingDisplay(spec, st.cur);
+        const keyLabel = esc(spec.ui_key || spec.name);
+        let control = '';
+        if (spec.kind === 'num') {
+          const hi = effectiveHi(spec, values);
+          control = `
+            <div class="slider-controls">
+              <input class="slider-input" type="range" min="${spec.lo}" max="${hi}" step="${spec.step}" value="${esc(st.parsed.ok ? st.parsed.stored : st.cur)}" data-key="${esc(spec.key)}" ${st.parsed.ok ? '' : ''}>
+              <input class="num-input" type="number" inputmode="decimal" min="${spec.lo}" max="${hi}" step="${spec.step}" value="${esc(st.parsed.ok ? st.parsed.stored : String(st.raw))}" data-key="${esc(spec.key)}" aria-label="${keyLabel}">
+            </div>`;
+        } else if (spec.kind === 'time') {
+          control = `<input class="time-input" type="time" value="${esc(st.parsed.ok ? st.parsed.stored : String(st.raw))}" data-key="${esc(spec.key)}" aria-label="${keyLabel}">`;
+        } else if (spec.kind === 'enum') {
+          const opts = (spec.choices || []).map((c) => `<option value="${esc(c)}" ${c === (st.parsed.ok ? st.parsed.stored : st.cur) ? 'selected' : ''}>${esc(c)}</option>`).join('');
+          control = `<select class="enum-input" data-key="${esc(spec.key)}" aria-label="${keyLabel}">${opts}</select>`;
+        } else if (spec.kind === 'bool') {
+          const on = (st.parsed.ok ? st.parsed.stored : st.cur) === '1';
+          control = `<button type="button" class="toggle${on ? ' on' : ''}" data-key="${esc(spec.key)}" aria-pressed="${on}" aria-label="${keyLabel}"></button>`;
         }
+        const hint = st.parsed.ok ? '' : `<div class="range-hint">${esc(st.parsed.error)}</div>`;
+        const saveBtn = (st.parsed.ok && st.dirty)
+          ? `<button type="button" class="row-save" data-save="${esc(spec.key)}">Wyślij w Telegramie · ${esc(st.parsed.command)}</button>`
+          : '';
         return `
-          <div class="slider-row">
-            <div class="slider-top"><span>${esc(k)}</span><span class="mono muted">${esc(val)}</span></div>
-          </div>
-        `;
+          <div class="${cls}" data-row="${esc(spec.key)}">
+            <div class="slider-top"><span class="slider-key">${keyLabel}</span><span class="slider-val">${esc(shown)}</span></div>
+            ${control}
+            ${hint}
+            ${saveBtn}
+          </div>`;
       }).join('');
       return `
-        <div class="card settings-group">
-          <div class="bot-full-head">
-            <strong>${esc(g.bot)}</strong>
-            <span class="small muted">w planie B przez Telegram</span>
+        <div class="card settings-group" id="settings-${esc(g)}">
+          <div class="settings-group-head">
+            <strong>${esc(groupLabels[g] || g)}</strong>
+            <span class="small muted">zapis przez Telegram</span>
           </div>
           ${rows}
-        </div>
-      `;
+        </div>`;
     }).join('');
+
+    const missing = published.live_missing || [];
+    const liveLockedHint = missing.length ? `<div class="small muted">LIVE na razie zablokowane: ${esc(missing.join('; '))}.</div>` : '';
+    const changes = published.change_log || [];
+    const logHtml = changes.length ? changes.slice(0, 20).map((c) => `
+          <div class="row-item">
+            <div class="row-main">
+              <div class="row-title">${esc(c.key)}</div>
+              <div class="row-sub">${esc(c.old ?? '—')} → ${esc(c.new ?? '—')} · ${esc(c.who || '')}</div>
+            </div>
+            <span class="small muted">${fmtTime(c.ts)}</span>
+          </div>`).join('') : '<div class="row-item"><span class="muted">Brak zmian.</span></div>';
+
+    const wdDraft = Object.prototype.hasOwnProperty.call(state.settingsDraft, 'withdraw_address')
+      ? state.settingsDraft.withdraw_address : '';
+    const wdOk = wdDraft && isValidSolanaAddress(wdDraft);
+    const wdErr = wdDraft && !wdOk ? 'To nie wygląda na adres Solana (Base58, 32–44 znaki).' : '';
+    const wdCmd = wdOk ? `set withdraw_address ${wdDraft.trim()}` : '';
+
+    const savebar = (dirtyValid.length || wdOk) ? `
+      <div class="settings-savebar" id="settings-savebar">
+        <div class="cmd-preview">${esc((dirtyValid[0] && dirtyValid[0].command) || wdCmd)}</div>
+        <button type="button" class="btn-primary" id="savebar-send">Wyślij ${dirtyValid.length + (wdOk ? 1 : 0)} zmianę w Telegramie</button>
+        <button type="button" class="btn-ghost" id="savebar-copy">Kopiuj komendę</button>
+      </div>` : '';
 
     $('main').innerHTML = `
       <div class="sec-head"><h2 class="sec-title">Account</h2></div>
@@ -756,11 +946,16 @@
         <div class="bot-full-head">
           <div>
             <strong>Tryb pracy: ${esc(mode)}</strong>
-            <div class="small muted">Zmiana trybu w planie B przez Telegram</div>
+            <div class="small muted">Zmiana trybu tylko przez Telegram (paper / live)</div>
           </div>
           <span class="badge-paper">${esc(mode)}</span>
         </div>
-        <div class="warning-box">LIVE trades real cash on FOMO. New coins can go to 0 in minutes. Only put in what you can lose.</div>
+        <div class="warning-box">${esc(liveWarning)}</div>
+        <div class="mode-row">
+          <button type="button" class="mode-btn ${mode === 'PAPER' ? 'active-paper' : ''}" id="mode-paper">PAPER</button>
+          <button type="button" class="mode-btn ${mode === 'LIVE' ? 'active-live' : ''}" id="mode-live">LIVE</button>
+        </div>
+        ${liveLockedHint}
         <div class="row-item" style="padding:8px 0 0;">
           <span>Gotówka (PAPER / API)</span>
           <span class="mono">${fmtUsd(acc.balance)}</span>
@@ -769,23 +964,21 @@
 
       <div class="list-card" style="margin-top:12px;">
         <a class="row-item" href="${esc(acc.profile_url || '#')}" target="_blank" rel="noopener">
-          <div class="row-main"><div class="row-title">Your FOMO profile</div><div class="row-sub">@${esc(acc.fomo_handle || 'LoseMadter')}</div></div>
+          <div class="row-main"><div class="row-title">Twój profil FOMO</div><div class="row-sub">@${esc(acc.fomo_handle || 'LoseMadter')}</div></div>
           <span class="muted">↗</span>
         </a>
         <div class="row-item" id="invite-friend-row" style="cursor:pointer;">
-          <div class="row-main"><div class="row-title">Invite a friend</div><div class="row-sub">Udostępnij lub skopiuj link polecający</div></div>
+          <div class="row-main"><div class="row-title">Zaproś znajomego</div><div class="row-sub">Udostępnij lub skopiuj link polecający</div></div>
           <span class="muted">↗</span>
         </div>
         <div class="row-item">
-          <div class="row-main"><div class="row-title">Copy picks</div><div class="row-sub">Harmonogram: ${esc(acc.copy_picks_schedule || 'off')}</div></div>
-          <span class="small muted">w planie B przez Telegram</span>
+          <div class="row-main"><div class="row-title">Copy picks</div><div class="row-sub">Harmonogram: ${esc(values.picks_every || acc.copy_picks_schedule || 'off')}</div></div>
         </div>
         <div class="row-item">
           <div class="row-main"><div class="row-title">Vault</div><div class="row-sub">${esc(acc.vault_status || 'pliki')}</div></div>
         </div>
         <div class="row-item">
-          <div class="row-main"><div class="row-title">Powiadomienia Push</div><div class="row-sub">Telegram only (Plan B)</div></div>
-          <button class="fomo-chip" disabled>Send test push</button>
+          <div class="row-main"><div class="row-title">Powiadomienia</div><div class="row-sub">Telegram only (Plan B) · ${esc(values.notifier || 'telegram')}</div></div>
         </div>
         <div class="row-item" id="watch-grok-bot" style="cursor:pointer;">
           <div class="row-main"><div class="row-title">Watch in Grok Bot</div><div class="row-sub">Otwórz podgląd ekranu bota</div></div>
@@ -793,27 +986,114 @@
         </div>
       </div>
 
-      <div class="sec-head"><h2 class="sec-title">Ustawienia botów</h2></div>
+      <div class="card settings-group" id="settings-special" style="margin-top:12px;">
+        <div class="settings-group-head">
+          <strong>Wypłata i RPC</strong>
+          <span class="small muted">właściciel ustawia sam</span>
+        </div>
+        <div class="slider-row">
+          <div class="slider-top"><span class="slider-key">rpc_url</span><span class="slider-val">${esc(rpcDisplay)}</span></div>
+          <div class="small muted">Jeśli RPC ma klucz, podajesz go tylko przez zamaskowaną kartę sekretu. Aplikacja pokazuje wyłącznie „set · host”.</div>
+        </div>
+        <div class="slider-row ${wdErr ? 'is-invalid' : (wdOk ? 'is-dirty' : '')}">
+          <div class="slider-top"><span class="slider-key">withdraw_address</span><span class="slider-val">${esc(wdStatus === 'set' ? 'ustawiony' : 'nie ustawiony')}</span></div>
+          <input class="addr-input" id="wd-input" type="text" autocomplete="off" spellcheck="false" placeholder="Adres Solana (wklej i wyślij w Telegramie)" value="${esc(wdDraft)}" aria-label="withdraw_address">
+          ${wdErr ? `<div class="range-hint">${esc(wdErr)}</div>` : '<div class="small muted">Desk nie zapisuje adresu z tej strony — Save otwiera Telegram z komendą, bot prosi o yes.</div>'}
+          ${wdOk ? `<button type="button" class="row-save" id="wd-save">Wyślij w Telegramie · set withdraw_address …</button>` : ''}
+        </div>
+      </div>
+
+      <div class="sec-head"><h2 class="sec-title">Ustawienia</h2></div>
       ${groupsHtml}
 
+      <div class="sec-head change-log"><h2 class="sec-title">Ostatnie zmiany</h2></div>
+      <div class="list-card">${logHtml}</div>
+
       <button id="unlink-desk" class="btn-secondary" style="margin-top:16px;">Odłącz desk na tym telefonie</button>
+      ${savebar}
     `;
+
+    const setDraft = (key, val) => {
+      const cur = currentSettingMap()[key];
+      if (String(val) === String(cur)) delete state.settingsDraft[key];
+      else state.settingsDraft[key] = String(val);
+      // Keep scroll position while re-rendering the tab
+      const y = window.scrollY;
+      renderAccount().then(() => window.scrollTo(0, y));
+    };
+
+    $('main').querySelectorAll('[data-key]').forEach((el) => {
+      const key = el.dataset.key;
+      const apply = () => {
+        if (el.type === 'range' || el.type === 'number' || el.type === 'time' || el.tagName === 'SELECT') {
+          setDraft(key, el.value);
+        }
+      };
+      if (el.classList.contains('toggle')) {
+        el.onclick = () => setDraft(key, el.classList.contains('on') ? '0' : '1');
+        return;
+      }
+      el.addEventListener('change', apply);
+      if (el.type === 'range') el.addEventListener('input', () => {
+        // live-update the sibling number field without a full rerender
+        const row = el.closest('[data-row]');
+        const num = row && row.querySelector('.num-input');
+        if (num) num.value = el.value;
+        const valEl = row && row.querySelector('.slider-val');
+        const spec = specs.find((x) => x.key === key);
+        if (valEl && spec) valEl.textContent = formatSettingDisplay(spec, el.value);
+      });
+      if (el.type === 'number') el.addEventListener('change', apply);
+    });
+
+    $('main').querySelectorAll('[data-save]').forEach((btn) => {
+      btn.onclick = () => {
+        const spec = specs.find((x) => x.key === btn.dataset.save);
+        if (!spec) return;
+        const raw = Object.prototype.hasOwnProperty.call(state.settingsDraft, spec.key)
+          ? state.settingsDraft[spec.key] : currentSettingMap()[spec.key];
+        const parsed = parseDraft(spec, raw, currentSettingMap());
+        if (parsed.ok) openTelegramCommand(parsed.command);
+      };
+    });
+
+    const wdInput = $('wd-input');
+    if (wdInput) {
+      wdInput.addEventListener('change', () => {
+        const v = wdInput.value.trim();
+        if (!v) delete state.settingsDraft.withdraw_address;
+        else state.settingsDraft.withdraw_address = v;
+        const y = window.scrollY;
+        renderAccount().then(() => window.scrollTo(0, y));
+      });
+    }
+    const wdSave = $('wd-save');
+    if (wdSave) wdSave.onclick = () => {
+      const v = (state.settingsDraft.withdraw_address || '').trim();
+      if (isValidSolanaAddress(v)) openTelegramCommand(`set withdraw_address ${v}`);
+    };
+
+    $('mode-paper').onclick = () => openTelegramCommand('paper');
+    $('mode-live').onclick = () => openTelegramCommand('live');
+
+    const firstCmd = (dirtyValid[0] && dirtyValid[0].command) || wdCmd || '';
+    const savebarSend = $('savebar-send');
+    if (savebarSend) savebarSend.onclick = () => { if (firstCmd) openTelegramCommand(firstCmd); };
+    const savebarCopy = $('savebar-copy');
+    if (savebarCopy) savebarCopy.onclick = async () => {
+      if (!firstCmd) return;
+      try { await navigator.clipboard.writeText(firstCmd); showToast('Skopiowano komendę'); }
+      catch { showToast(firstCmd); }
+    };
 
     $('invite-friend-row').onclick = async () => {
       const url = acc.signup_url;
       if (!url) return;
       if (navigator.share) {
-        try {
-          await navigator.share({ title: 'FOMO', url });
-          return;
-        } catch {}
+        try { await navigator.share({ title: 'FOMO', url }); return; } catch {}
       }
-      try {
-        await navigator.clipboard.writeText(url);
-        showToast('Link copied');
-      } catch {
-        showToast('Link copied');
-      }
+      try { await navigator.clipboard.writeText(url); showToast('Link skopiowany'); }
+      catch { showToast('Link skopiowany'); }
     };
 
     $('watch-grok-bot').onclick = () => {
@@ -827,6 +1107,7 @@
     $('unlink-desk').onclick = () => {
       localStorage.removeItem('desk_data_path');
       state.dataPath = '';
+      state.settingsDraft = {};
       render();
     };
   }

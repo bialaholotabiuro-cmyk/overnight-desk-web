@@ -1,10 +1,11 @@
-const CACHE_NAME = 'grok-desk-shell-v1';
+const CACHE_NAME = 'grok-desk-shell-v2';
 const SHELL_ASSETS = [
   './',
   './index.html',
   './app.css',
   './app.js',
   './chart.js',
+  './settings-registry.js',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png'
