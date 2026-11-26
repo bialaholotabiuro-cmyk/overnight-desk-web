@@ -338,7 +338,7 @@
         `;
       } else if (b.name === 'brain') {
         detail = b.latest
-          ? `<div class="small">Score ${esc(b.latest.score ?? '—')} · Social +${esc(b.latest.social_pts ?? 0)}</div><div class="small muted">${Number(b.latest.score || 0) >= 80 ? '80+ = full size' : 'under 80 = half size'}</div>`
+          ? `<div class="small">${esc(b.latest.symbol || '')} · $${Number(b.latest.sizeUsd || 0).toFixed(2)} · ${esc(b.latest.pctOfCash ?? 0)}% of cash</div><div class="small muted">cap: ${esc(b.latest.capHit || 'none')} · score ${esc(b.latest.score ?? '—')}</div>`
           : `<div class="small">Sizing</div><div class="small muted">80+ = full size</div>`;
       } else if (b.name === 'executor') {
         detail = `<div class="small">${b.count} ${m.unit}</div><div class="small muted">${lo ? `${esc(lo.status)} · ${esc(lo.quote_source || 'fomo')}` : 'Waiting for a dip -15%'}</div>`;
